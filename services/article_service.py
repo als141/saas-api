@@ -18,7 +18,8 @@ from schemas.response import (
     WebSocketMessage, ServerEventMessage, ClientResponseMessage, UserActionPayload,
     StatusUpdatePayload, ThemeProposalPayload, ResearchPlanPayload, ResearchProgressPayload,
     ResearchCompletePayload, OutlinePayload, SectionChunkPayload, EditingStartPayload,
-    FinalResultPayload, ErrorPayload, UserInputRequestPayload, UserInputType
+    FinalResultPayload, ErrorPayload, UserInputRequestPayload, UserInputType,
+    SelectThemePayload, ApprovePayload # ApprovePayload を追加
 )
 from services.context import ArticleContext
 from services.models import (
@@ -225,17 +226,33 @@ class ArticleGenerationService:
                                 {"themes": theme_data}
                             )
                             # クライアントからの応答を処理
-                            if user_response and isinstance(user_response, dict) and "selected_index" in user_response:
-                                selected_index = user_response["selected_index"]
-                                if 0 <= selected_index < len(agent_output.themes):
-                                    context.selected_theme = agent_output.themes[selected_index]
-                                    context.current_step = "theme_selected"
-                                    console.print(f"[green]クライアントがテーマ「{context.selected_theme.title}」を選択しました。[/green]")
-                                    await self._send_server_event(context, StatusUpdatePayload(step=context.current_step, message=f"Theme selected: {context.selected_theme.title}"))
-                                else:
-                                    raise ValueError("無効なテーマインデックスが選択されました。")
+                            if user_response:
+                                console.print(f"[cyan]クライアントからの応答を受信 (型: {type(user_response)}): {user_response}[/cyan]")
+                                try:
+                                    selected_index = None
+                                    # user_response が SelectThemePayload インスタンスかチェック
+                                    if isinstance(user_response, SelectThemePayload): # 型チェックを追加
+                                        selected_index = user_response.selected_index # 属性アクセスに変更
+                                    # 辞書の場合も念のため残す
+                                    elif isinstance(user_response, dict) and "selected_index" in user_response:
+                                        selected_index = int(user_response["selected_index"])
+
+                                    if selected_index is not None and 0 <= selected_index < len(agent_output.themes):
+                                        context.selected_theme = agent_output.themes[selected_index]
+                                        context.current_step = "theme_selected"
+                                        console.print(f"[green]クライアントがテーマ「{context.selected_theme.title}」を選択しました。[/green]")
+                                        await self._send_server_event(context, StatusUpdatePayload(step=context.current_step, message=f"Theme selected: {context.selected_theme.title}"))
+                                    else:
+                                        if selected_index is None:
+                                            # エラーメッセージを修正
+                                            raise ValueError(f"テーマ選択の応答ペイロードから selected_index を抽出できませんでした: {user_response}")
+                                        else:
+                                            raise ValueError(f"無効なテーマインデックスが選択されました: {selected_index} (有効範囲: 0～{len(agent_output.themes)-1})")
+                                except (AttributeError, TypeError, ValueError) as e: # AttributeError をキャッチするよう修正
+                                    console.print(f"[bold red]テーマ選択の応答処理中にエラー: {e}[/bold red]")
+                                    raise ValueError(f"テーマ選択の応答処理に失敗しました: {e}")
                             else:
-                                raise ValueError("テーマ選択の応答が不正です。")
+                                raise ValueError("テーマ選択の応答が空です。")
                         else:
                             raise ValueError("テーマ案が生成されませんでした。")
                     elif isinstance(agent_output, ClarificationNeeded):
@@ -267,7 +284,13 @@ class ArticleGenerationService:
                             UserInputType.APPROVE_PLAN,
                             {"plan": plan_data}
                         )
-                        if user_response and isinstance(user_response, dict) and user_response.get("approved") is True:
+                        # 承認ペイロードがApprovePayloadまたはdictの場合に対応
+                        approved = False
+                        if isinstance(user_response, ApprovePayload):
+                            approved = user_response.approved
+                        elif isinstance(user_response, dict):
+                            approved = bool(user_response.get("approved"))
+                        if approved:
                             console.print("[green]クライアントがリサーチ計画を承認しました。[/green]")
                             context.current_step = "researching" # リサーチ開始
                             context.current_research_query_index = 0
@@ -278,7 +301,7 @@ class ArticleGenerationService:
                     elif isinstance(agent_output, ClarificationNeeded):
                          raise ValueError(f"リサーチ計画生成で確認が必要になりました: {agent_output.message}")
                     else:
-                        raise TypeError(f"予期しないAgent出力タイプ: {type(agent_output)}")
+                         raise TypeError(f"予期しないAgent出力タイプ: {type(agent_output)}")
 
                 elif context.current_step == "researching":
                     if not context.research_plan: raise ValueError("リサーチ計画がありません。")
@@ -358,7 +381,13 @@ class ArticleGenerationService:
                             UserInputType.APPROVE_OUTLINE,
                             {"outline": outline_data}
                         )
-                        if user_response and isinstance(user_response, dict) and user_response.get("approved") is True:
+                        # 承認ペイロードがApprovePayloadまたはdictの場合に対応
+                        approved = False
+                        if isinstance(user_response, ApprovePayload):
+                            approved = user_response.approved
+                        elif isinstance(user_response, dict):
+                            approved = bool(user_response.get("approved"))
+                        if approved:
                             console.print("[green]クライアントがアウトラインを承認しました。[/green]")
                             context.current_step = "writing_sections" # 執筆開始
                             context.current_section_index = 0
